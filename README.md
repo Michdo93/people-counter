@@ -3,7 +3,7 @@
 A headless people counter based on the **ASUS Xtion Pro** depth camera featuring:
 
 - **Person detection** via OpenNI2 + OpenCV (side-view or top-view mode)
-- **MQTT publishing** of the current person count on every change
+- **MQTT publishing** of the current person count on every change (TLS, authenticated)
 - **Live dashboard** in the browser (MJPEG stream + history chart)
 - **Temporal smoothing** (median filter over N frames, no flickering)
 
@@ -14,10 +14,12 @@ A headless people counter based on the **ASUS Xtion Pro** depth camera featuring
 - [Hardware Requirements](#hardware-requirements)
 - [Installation – Ubuntu (x86\_64)](#installation--ubuntu-x86_64)
 - [Installation – Raspberry Pi OS (ARM)](#installation--raspberry-pi-os-arm)
+- [Mosquitto Configuration](#mosquitto-configuration)
 - [Configuration](#configuration)
 - [Running](#running)
 - [Web Interface](#web-interface)
 - [MQTT](#mqtt)
+- [openHAB Integration](#openhab-integration)
 - [Running as a System Service](#running-as-a-system-service)
 - [Detection Modes](#detection-modes)
 - [Troubleshooting](#troubleshooting)
@@ -188,6 +190,98 @@ The script detects this path automatically.
 
 ---
 
+## Mosquitto Configuration
+
+The broker runs locally on the Pi with two listeners:
+
+- **Port 1883** – localhost only (used by `people_counter.py` internally)
+- **Port 8883** – TLS-encrypted, for external clients such as openHAB
+
+### 1. Install Mosquitto
+
+```bash
+sudo apt install -y mosquitto mosquitto-clients
+```
+
+### 2. Apply configuration
+
+Copy `etc/mosquitto/mosquitto.conf` from this repository or edit the file directly:
+
+```bash
+sudo nano /etc/mosquitto/mosquitto.conf
+```
+
+```
+pid_file /run/mosquitto/mosquitto.pid
+
+persistence true
+persistence_location /var/lib/mosquitto/
+
+log_dest file /var/log/mosquitto/mosquitto.log
+
+password_file /etc/mosquitto/passwd
+allow_anonymous false
+
+listener 1883 127.0.0.1
+
+listener 8883
+cafile /etc/mosquitto/certs/ca.crt
+certfile /etc/mosquitto/certs/server.crt
+keyfile /etc/mosquitto/certs/server.key
+tls_version tlsv1.2
+```
+
+### 3. Create a password file
+
+```bash
+sudo mosquitto_passwd -c /etc/mosquitto/passwd peoplecounter
+# Enter password when prompted (default in examples: changeme)
+```
+
+### 4. Generate TLS certificates (self-signed)
+
+```bash
+sudo mkdir -p /etc/mosquitto/certs
+cd /etc/mosquitto/certs
+
+# Certificate Authority
+sudo openssl req -new -x509 -days 3650 -keyout ca.key -out ca.crt \
+  -subj "/CN=PeopleCounter-CA" -nodes
+
+# Server key and certificate
+sudo openssl req -new -keyout server.key -out server.csr \
+  -subj "/CN=peoplecounter.local" -nodes
+sudo openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out server.crt -days 3650
+
+sudo chmod 640 /etc/mosquitto/certs/*.key
+sudo chown mosquitto:mosquitto /etc/mosquitto/certs/*
+```
+
+### 5. Enable and start Mosquitto
+
+```bash
+sudo systemctl enable mosquitto
+sudo systemctl restart mosquitto
+sudo systemctl status mosquitto
+```
+
+### 6. Test the connection
+
+```bash
+# Copy the CA certificate to the client machine (e.g. your openHAB host)
+scp pi@peoplecounter.local:/etc/mosquitto/certs/ca.crt ~/
+
+# Subscribe via TLS on port 8883
+mosquitto_sub \
+  --cafile ~/ca.crt \
+  -h peoplecounter.local -p 8883 \
+  -u peoplecounter -P changeme \
+  -t "people_counter/#" -v
+```
+
+---
+
 ## Configuration
 
 All parameters are located at the top of `people_counter.py`:
@@ -196,26 +290,28 @@ All parameters are located at the top of `people_counter.py`:
 # OpenNI2 library path (None = auto-detect)
 OPENNI2_REDIST   = None
 
-# MQTT
-MQTT_BROKER      = "localhost"      # IP or hostname of your broker
-MQTT_PORT        = 1883
+# MQTT – broker runs locally, plain on 1883 (loopback only)
+MQTT_BROKER      = "localhost"
+MQTT_PORT        = 1883              # internal loopback; TLS on 8883 for external clients
 MQTT_TOPIC_COUNT = "people_counter/count"
 MQTT_TOPIC_STATE = "people_counter/status"
 
 # Web server
 WEB_PORT         = 5000
-STREAM_FPS       = 10              # MJPEG frame rate (lower = less CPU load)
+STREAM_FPS       = 10               # MJPEG frame rate (lower = less CPU load)
 
 # Detection mode
-MODE             = "side"          # "side" = side-view, "top" = top-down view
+MODE             = "side"           # "side" = side-view, "top" = top-down view
 
 # Blob filter – side-view
-SIDE_AREA_MIN    = 3000            # increase to reduce noise
-SIDE_AREA_MAX    = 80000           # increase if camera is very close
+SIDE_AREA_MIN    = 3000             # increase to reduce noise
+SIDE_AREA_MAX    = 80000            # increase if camera is very close
 
 # Temporal smoothing
-SMOOTHING_FRAMES = 11              # median over N frames (1 = disabled)
+SMOOTHING_FRAMES = 11               # median over N frames (1 = disabled)
 ```
+
+> `people_counter.py` connects to Mosquitto on **port 1883 via loopback** (no TLS needed for local communication). External clients such as openHAB connect on **port 8883 with TLS and authentication**.
 
 ---
 
@@ -272,18 +368,83 @@ A message is published whenever the smoothed person count changes:
 | `people_counter/count` | `"2"` | `retain=true`, QoS 1 |
 | `people_counter/status` | `"online"` / `"offline"` | Last Will configured |
 
-To monitor messages:
+Monitor via TLS from an external machine (CA certificate required):
 
 ```bash
-mosquitto_sub -h localhost -t "people_counter/#" -v
+mosquitto_sub \
+  --cafile ~/ca.crt \
+  -h peoplecounter.local -p 8883 \
+  -u peoplecounter -P changeme \
+  -t "people_counter/#" -v
 ```
 
-### openHAB integration (example)
+---
 
-```java
-// items/people_counter.items
-Number PeopleCount "Person count [%d]" { mqtt="<[broker:people_counter/count:state:default]" }
+## openHAB Integration
+
+The repository includes ready-to-use configuration files for openHAB (MQTT Binding).
+
+### File overview
+
+| File | Destination on openHAB host |
+|---|---|
+| `things/people_counter.things` | `/etc/openhab/things/` |
+| `items/people_counter.items` | `/etc/openhab/items/` |
+| `transform/people_counter_status.map` | `/etc/openhab/transform/` |
+| `automation/people_counter.py` | `/etc/openhab/automation/python/` |
+
+### 1. Copy the CA certificate to the openHAB host
+
+```bash
+scp pi@peoplecounter.local:/etc/mosquitto/certs/ca.crt \
+    /etc/openhab/certs/people_counter_ca.crt
+sudo chown openhab:openhab /etc/openhab/certs/people_counter_ca.crt
 ```
+
+### 2. Things
+
+The Things file defines a dedicated MQTT broker Thing (TLS, port 8883) and the two channels:
+
+```
+mqtt:broker:peoplecounter  →  peoplecounter.local:8883  (TLS, authenticated)
+mqtt:topic:peoplecounter:xtion
+    channel: count   ←  people_counter/count
+    channel: status  ←  people_counter/status
+```
+
+Adjust `host`, `username` and `password` in `things/people_counter.things` if needed.
+
+### 3. Items
+
+| Item | Type | Description |
+|---|---|---|
+| `PeopleCount` | `Number` | Current smoothed person count |
+| `PeopleCounter_State` | `Switch` | `ON` = online, `OFF` = offline |
+
+`PeopleCounter_State` uses the MAP transformation `people_counter_status.map` to convert the string payloads `"online"` / `"offline"` to openHAB Switch states.
+
+### 4. Transformation
+
+`transform/people_counter_status.map`:
+
+```
+online=ON
+offline=OFF
+-=-
+NULL=OFF
+=OFF
+```
+
+### 5. Python automation rules
+
+`automation/people_counter.py` provides four rules:
+
+| Rule | Trigger | Action |
+|---|---|---|
+| `PeopleCount Changed` | `PeopleCount` item changes | Logs the change; hooks for light control included (commented out) |
+| `PeopleCounter Status Changed` | `PeopleCounter_State` item changes | Logs online/offline; resets count to 0 when offline |
+| `PeopleCount Threshold Warning` | `PeopleCount` item changes | Logs a warning when count ≥ threshold (default: 5) |
+| `PeopleCount Periodic Log` | Cron every 5 minutes | Logs current count and status |
 
 ---
 
@@ -312,8 +473,6 @@ WantedBy=multi-user.target
 ```
 
 > On Raspberry Pi, replace `User=ubuntu` with `User=pi` (or whichever user runs the script).
-
-Enable and start the service:
 
 ```bash
 sudo systemctl daemon-reload
@@ -401,3 +560,16 @@ journalctl -u people-counter -f
 ### Count flickers heavily (0–1–0–1)
 
 Increase `SMOOTHING_FRAMES` (e.g. to 15–21) or raise `SIDE_AREA_MIN` to filter out small noise blobs.
+
+### Mosquitto TLS connection refused
+
+```bash
+# Verify Mosquitto is listening on port 8883
+ss -tlnp | grep 8883
+
+# Test TLS handshake
+openssl s_client -connect peoplecounter.local:8883 -CAfile ~/ca.crt
+
+# Check Mosquitto logs
+sudo journalctl -u mosquitto -f
+```
