@@ -1,0 +1,13 @@
+# people_counter_status.map
+# Transformation: MQTT payload → openHAB switch state
+#
+# Location: $OPENHAB_CONF/transform/people_counter_status.map
+# (typically: /etc/openhab/transform/ or /opt/openhab/conf/transform/)
+
+online=ON
+offline=OFF
+
+# Fallback for unknown values
+-=-
+NULL=OFF
+=OFF
