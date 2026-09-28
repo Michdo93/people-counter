@@ -290,9 +290,12 @@ All parameters are located at the top of `people_counter.py`:
 # OpenNI2 library path (None = auto-detect)
 OPENNI2_REDIST   = None
 
-# MQTT – broker runs locally, plain on 1883 (loopback only)
-MQTT_BROKER      = "localhost"
-MQTT_PORT        = 1883              # internal loopback; TLS on 8883 for external clients
+MQTT_BROKER      = "127.0.0.1"
+MQTT_PORT        = 8883
+MQTT_USER        = "peoplecounter"
+MQTT_PASSWORD    = "changeme"
+MQTT_CA_CERT     = "/etc/mosquitto/certs/ca.crt"
+
 MQTT_TOPIC_COUNT = "people_counter/count"
 MQTT_TOPIC_STATE = "people_counter/status"
 
