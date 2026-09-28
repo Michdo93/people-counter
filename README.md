@@ -236,6 +236,7 @@ tls_version tlsv1.2
 ```bash
 sudo mosquitto_passwd -c /etc/mosquitto/passwd peoplecounter
 # Enter password when prompted (default in examples: changeme)
+sudo chown mosquitto:mosquitto /etc/mosquitto/passwd
 ```
 
 ### 4. Generate TLS certificates (self-signed)
