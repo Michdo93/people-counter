@@ -1,0 +1,13 @@
+// people_counter.items
+// People Counter (Xtion Pro) – MQTT Items
+
+// Current number of people (smoothed)
+Number PeopleCount "Person Count [%d]" <people> (gPeopleCounter) {
+    channel = "mqtt:topic:people_counter:count"
+}
+
+// Camera's online/offline status as a switch (ON = online, OFF = offline)
+Switch PeopleCounter_State "People Counter Status [MAP(people_counter_status.map):%s]" <switch> (gPeopleCounter) {
+    channel = "mqtt:topic:people_counter:status",
+    transform = "MAP(people_counter_status.map)"
+}
