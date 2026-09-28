@@ -1,19 +1,47 @@
-// people_counter.things
+// things/people_counter.things
 // MQTT Binding – People Counter (Xtion Pro)
 //
-// Prerequisite: The MQTT Broker Thing must already be configured, e.g.:
-//   mqtt:broker:mosquitto [ host="localhost", port=1883 ]
+// Mosquitto runs locally on the Pi with TLS (port 8883) and authentication.
+// The ca.crt file must be located on the openHAB host, e.g.:
+//   /etc/openhab/certs/people_counter_ca.crt
 //
-// If your Broker Thing has a different ID, update "mosquitto" below.
+// Copy the certificate from the Pi (one-time):
+//   scp pi@peoplecounter.local:/etc/mosquitto/certs/ca.crt \
+//       /etc/openhab/certs/people_counter_ca.crt
+//   sudo chown openhab:openhab /etc/openhab/certs/people_counter_ca.crt
 
-Thing mqtt:topic:people_counter "People Counter Xtion Pro" (mqtt:broker:mosquitto) {
+// ── Broker ────────────────────────────────────────────────────────────────────
+mqtt:broker:peoplecounter "People Counter Broker" [
+    host              = "peoplecounter.local",
+    port              = 8883,
+    secure            = true,
+    certificatepin    = false,
+    publickeypin      = false,
+    keystore          = "/etc/openhab/certs/people_counter_ca.crt",
+    keystorepwd       = "",
+    username          = "peoplecounter",
+    password          = "changeme",
+    clientid          = "openhab_people_counter",
+    keepalive         = 60,
+    reconnectTime     = 5000
+]
+
+// ── Thing ─────────────────────────────────────────────────────────────────────
+Thing mqtt:topic:peoplecounter:xtion "People Counter Xtion Pro" (mqtt:broker:peoplecounter) [
+    availabilityTopic   = "people_counter/status",
+    payloadAvailable    = "online",
+    payloadNotAvailable = "offline"
+] {
     Channels:
-        Type number : count [
-            stateTopic   = "people_counter/count",
-            retained     = true
+        // Current number of people (smoothed, median)
+        Type number : count "Person Count" [
+            stateTopic = "people_counter/count",
+            retained   = true
         ]
-        Type string  : status [
-            stateTopic   = "people_counter/status",
-            retained     = true
+
+        // Online/offline status of the counter
+        Type string : status "Counter Status" [
+            stateTopic = "people_counter/status",
+            retained   = true
         ]
 }
