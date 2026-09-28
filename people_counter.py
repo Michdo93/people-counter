@@ -42,7 +42,11 @@ from flask import Flask, Response, render_template_string
 OPENNI2_REDIST   = None          # None = search automatically
 
 MQTT_BROKER      = "127.0.0.1"
-MQTT_PORT        = 1883
+MQTT_PORT        = 8883
+MQTT_USER        = "peoplecounter"
+MQTT_PASSWORD    = "changeme"
+MQTT_CA_CERT     = "/etc/mosquitto/certs/ca.crt"
+
 MQTT_TOPIC_COUNT = "people_counter/count"
 MQTT_TOPIC_STATE = "people_counter/status"
 
@@ -317,20 +321,43 @@ def render_frame(vis, count, raw, fps, history):
 # ─────────────────────────────────────────────
 
 def create_mqtt():
-    client = mqtt.Client(client_id="xtion_people_counter")
+    # Ensuring Compatibility with Paho MQTT v1 and v2
+    try:
+        client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION1, 
+            client_id="xtion_people_counter"
+        )
+    except AttributeError:
+        client = mqtt.Client(client_id="xtion_people_counter")
+
+    # 1. Set a username and password
+    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+
+    # 2. TLS with the CA certificate
+    try:
+        client.tls_set(ca_certs=MQTT_CA_CERT)
+        # If you are using an IP instead of a hostname (e.g., 127.0.0.1)
+        # and the certificate is issued to a specific name:
+        # client.tls_insecure_set(True) 
+    except Exception as e:
+        print(f"[MQTT] Error loading CA certificate ({MQTT_CA_CERT}): {e}")
+
     def on_connect(c, u, f, rc):
         if rc == 0:
-            print(f"[MQTT] Connected: {MQTT_BROKER}:{MQTT_PORT}")
+            print(f"[MQTT] Secure Connected (TLS): {MQTT_BROKER}:{MQTT_PORT}")
             c.publish(MQTT_TOPIC_STATE, "online", retain=True)
         else:
-            print(f"[MQTT] Error rc={rc}")
+            print(f"[MQTT] Error connecting rc={rc}")
+
     client.on_connect = on_connect
     client.will_set(MQTT_TOPIC_STATE, "offline", retain=True)
+
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         client.loop_start()
     except Exception as e:
         print(f"[MQTT] Not reachable: {e}")
+
     return client
 
 
