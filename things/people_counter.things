@@ -1,0 +1,19 @@
+// people_counter.things
+// MQTT Binding – People Counter (Xtion Pro)
+//
+// Prerequisite: The MQTT Broker Thing must already be configured, e.g.:
+//   mqtt:broker:mosquitto [ host="localhost", port=1883 ]
+//
+// If your Broker Thing has a different ID, update "mosquitto" below.
+
+Thing mqtt:topic:people_counter "People Counter Xtion Pro" (mqtt:broker:mosquitto) {
+    Channels:
+        Type number : count [
+            stateTopic   = "people_counter/count",
+            retained     = true
+        ]
+        Type string  : status [
+            stateTopic   = "people_counter/status",
+            retained     = true
+        ]
+}
